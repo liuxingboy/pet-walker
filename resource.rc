@@ -1,0 +1,9 @@
+// resource.rc
+#include <windows.h>
+
+// 定义图标 ID
+#define IDI_APP_ICON 101
+
+// 将图标文件关联到 ID
+// 请确保目录下有名为 app.ico 的图标文件
+IDI_APP_ICON ICON "app.ico"

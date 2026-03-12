@@ -1,0 +1,12 @@
+.vs/
+.claude/
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.log
+*.tlog
+*.lastbuildstate
+*.exe
+*.res
