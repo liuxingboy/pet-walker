@@ -1,61 +1,65 @@
-# 定时提醒助手（ScheduledPopUp）
+# Pet Walker · 蓝蝶少女桌宠
 
-这是一个基于C++和Windows API 开发的轻量级桌面提醒工具。它常驻系统托盘，能够根据设定的时间间隔弹出通知弹窗，提醒用户喝水、休息或远眺，缓解办公学习疲劳。
+<img src="icons/app-icon.png" width="128" alt="蓝蝶少女桌宠图标">
 
-## 🚀 快速下载
-可以直接在 [Releases 页面](https://github.com/liuxingboy/ScheduledPopUp/releases/) 下载编译好的程序，解压即用。
+Windows 透明桌面散步宠物，集成定时休息提醒、漫画气泡和系统托盘控制。由原 ScheduledPopUp 定时提醒项目发展而来，旧版 C++ 实现保留在 Git 历史中。
 
-## ✨ 功能特点
+## 功能
 
-- **常驻托盘**：不占用任务栏空间，通过托盘图标进行管理。
-- **自定义间隔**：通过配置文件自由设置提醒频率。
-- **动态文案**：支持随机或顺序循环展示预设的多条温馨提醒。
-- **计时统计**：鼠标放托盘图标显示距离上次提醒过去的时间。
-- **配置窗口**：提供简单的界面用于查看或快速调整。
+- 随机左右散步、停留休息、待机与挥手；向右采用固定角色图层制作轻柔小步走动画。
+- 拖动定位、多显示器、三档速度和大小、悬停暂停、托盘隐藏与恢复。
+- 默认每 55 分钟提醒休息，支持 1–1440 分钟间隔及自定义文案，避免连续重复。
+- 提醒时暂停散步并挥手，显示小型漫画气泡；点击文字或空白即可关闭，不点击则 5 分钟后消失，再开始下一轮计时。
+- 支持测试提醒、暂停提醒 1 小时；隐藏、拖动或打开菜单时暂缓弹出，睡眠恢复后不补发通知队列。
+- 圆角角色图标、单实例运行，设置自动保存。
 
-## 🛠️ 技术栈
+程序独立运行，不依赖 Codex、Python 或大模型服务，不读取 Codex 任务状态。运行过程无需联网。
 
-- **语言**：C++
-- **平台**： Windows SDK（win32 API）
-- **配置格式**：INI 文件
+## 编译与启动
 
-## 🚀 快速开始
+需要 Windows x64、Windows PowerShell 和 .NET Framework 4.x。使用系统自带的 Framework64/v4.0.30319/csc.exe，无需安装 Visual Studio。
 
-### 1. 环境准备
-- Windows 10 或更高版本。
-- 编译器：MSVC (Visual Studio 2019+ / Build Tools)。
-
-### 2. 编译
-使用命令行或 VS 打开项目进行编译：
-```bash
-rc resource.rc && cl.exe /utf-8 main.cpp resource.res user32.lib shell32.lib gdi32.lib /Fe:ScheduledPopUp.exe
+```powershell
+git clone https://github.com/liuxingboy/pet-walker.git
+cd pet-walker
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+.\HydrangeaWalker.exe
 ```
 
-### 3. 运行
-确保 config.ini 与生成的 main.exe 处于同一目录下，直接运行即可。
+EXE 与 assets 文件夹须放在同一目录。程序在自身目录写入 settings.json，请放在当前用户可写的位置。图标已嵌入 EXE。不默认设置开机自启。
 
-## ⚙️ 配置说明 (config.ini)
-程序启动时会读取同级目录下的 config.ini：
+## 操作
 
-Ini, TOML
-[Settings]
-IntervalMinutes=35  ; 提醒间隔，单位为分钟
-IntervalMinutes: 设置两次提醒之间的逻辑间隔。默认值为 30 分钟。
+| 操作 | 效果 |
+| --- | --- |
+| 左键拖动 | 调整位置及所在显示器 |
+| 鼠标悬停 | 默认暂停散步，移开后继续 |
+| 右键角色或托盘 | 暂停、挥手、速度、大小、显示器、回到底部、隐藏或退出 |
+| 双击托盘 | 重新显示角色 |
+| 右键 → 休息提醒 | 设置间隔和文案、测试提醒、暂停提醒 |
+| 点击提醒气泡 | 收起气泡并重新计时 |
 
-## 📂 文件结构
-| 文件/目录 | 说明 |
-| :--- | :--- |
-| **`main.cpp`** | **核心源码**：包含程序主逻辑、托盘图标管理及定时器实现。 |
-| **`config.ini`** | **配置文件**：用户可在此自定义提醒间隔（分钟）。 |
-| `ReminderApp.vcxproj` | 项目主配置文件，定义了编译包含的源文件和库依赖。 |
-| `main.exe` | 编译产物：可执行程序。 |
+暂停散步不会关闭提醒。退出后停止计时；再次启动从完整提醒间隔开始。
 
-## 📝 预设提醒语示例
-亲爱的，该喝口水休息一下啦~
+## 打包与验证
 
-眼睛累了吗？望望窗外远方吧。
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\package.ps1
+Start-Process .\HydrangeaWalker.exe -ArgumentList '--self-test' -Wait
+Get-Content .\self-test-report.txt
+```
 
-站起来活动活动筋骨，身体是革命的本钱哦！
+打包脚本自动编译，生成 dist/HydrangeaWalker-portable.zip，只包含程序、运行素材、图标和说明，不包含个人设置。
 
+可选界面检查：--smoke-test（约 8 秒）和 --reminder-smoke-test（约 7 秒）。运行前退出正常桌宠；测试会显示窗口并自动退出。--pause、--quit 可控制已运行实例。
 
----
+## 项目结构
+
+- PetWalker.cs：透明窗口、散步、托盘及设置。
+- Reminder.cs：提醒计时、漫画气泡、设置和图标。
+- RightWalkRig.cs：向右行走分层动画。
+- assets/：26 张基础动作图；rig/ 包含身体、双腿图层与关节配置。
+- icons/：构建图标与项目头像。
+- build.ps1、package.ps1：编译和便携打包。
+
+仓库不包含编译产物、个人设置、备份、重复素材、原始生成图、动画实验及测试输出。旧 ScheduledPopUp 发布包属于原提醒程序，不是当前桌宠版本。
