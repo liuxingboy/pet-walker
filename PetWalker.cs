@@ -7,11 +7,12 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 // All movement is confined to this program's own transparent window.
-// No Codex process injection, window manipulation, task polling or network access.
+// No Codex process injection or window manipulation. Optional Todo uses its configured API.
 public sealed class WalkMotion {
     public double X, Y, Target, MinX, MaxX, MinY, MaxY, Speed=42, Rest=2;
     public bool Walking; public int Direction=1; public int Trips;
@@ -44,6 +45,7 @@ public sealed class WalkMotion {
 }
 
 public sealed class WalkerSettings {
+    public TodoSettings Todo=new TodoSettings();
     public int Size=192; public double Speed=42; public int X=int.MinValue,Y=int.MinValue;
     public bool Paused=false,PauseOnHover=true; public string Monitor="";
     public bool RemindersEnabled=true; public int ReminderMinutes=55;
@@ -78,6 +80,8 @@ sealed class PetWindow : Form {
     readonly bool smoke; WalkerSettings settings; Screen monitor;
     readonly bool reminderSmoke;
     ReminderSchedule reminders; ReminderBubble bubble; bool optionsOpen;
+    TodoClient todoClient; CancellationTokenSource todoRequest;
+    string displayedMessage="",pendingTodoText;
     readonly Random reminderRandom=new Random();int previousMessage=-1,reminderStage,remindersShown;
     double bubbleUntil,lastTip,testReminderX; string animationState="";
     ToolStripMenuItem pauseItem,hoverItem,hideItem; Bitmap current;
@@ -91,6 +95,7 @@ sealed class PetWindow : Form {
         AutoScaleMode=AutoScaleMode.None;
         applicationIcon=PetIcons.Load(new Size(32,32));notificationIcon=PetIcons.Load(SystemInformation.SmallIconSize);Icon=applicationIcon;
         settings=ReadSettings();
+        todoClient=new TodoClient(settings.Todo);
         reminders=new ReminderSchedule(settings.RemindersEnabled,settings.ReminderMinutes,DateTime.UtcNow);
         LoadArt("idle",6);LoadArt("wave",4);LoadArt("walk-left",8);LoadArt("walk-right",8);
         string naturalRight=Path.Combine(root,"assets","natural-right"),rightRig=Path.Combine(root,"assets","rig");
@@ -119,6 +124,8 @@ sealed class PetWindow : Form {
             if(s==null)throw new Exception();s.Size=(int)WalkMotion.Clamp(s.Size,128,320);
             s.Speed=double.IsNaN(s.Speed)||double.IsInfinity(s.Speed)?42:WalkMotion.Clamp(s.Speed,15,100);
             s.ReminderMinutes=(int)WalkMotion.Clamp(s.ReminderMinutes,1,1440);
+            if(s.Todo==null)s.Todo=new TodoSettings();
+            s.Todo.Count=(int)WalkMotion.Clamp(s.Todo.Count,1,50);
             var messages=new List<string>();if(s.ReminderMessages!=null)foreach(var line in s.ReminderMessages)if(!String.IsNullOrWhiteSpace(line)&&line.Length<=100)messages.Add(line.Trim());
             s.ReminderMessages=messages.Count>0?messages.ToArray():new WalkerSettings().ReminderMessages;return s;
         }catch{return new WalkerSettings();}
@@ -161,6 +168,19 @@ sealed class PetWindow : Form {
         reminderMenu.DropDownItems.Add("测试提醒",null,delegate{ShowReminder(true);});
         var pauseReminder=new ToolStripMenuItem("暂停提醒 1 小时");pauseReminder.Click+=delegate{DismissReminder(false,false);reminders.Snooze(DateTime.UtcNow,60);};reminderMenu.DropDownItems.Add(pauseReminder);
         reminderMenu.DropDownOpening+=delegate{enable.Checked=settings.RemindersEnabled;status.Text=reminders.Status(DateTime.UtcNow);pauseReminder.Enabled=settings.RemindersEnabled;};menu.Items.Add(reminderMenu);
+        var todoMenu=new ToolStripMenuItem("Todo");
+        var todoEnabled=new ToolStripMenuItem("启用 Todo 提醒");
+        todoEnabled.Click+=delegate{
+            if(!settings.Todo.Enabled&&(String.IsNullOrWhiteSpace(settings.Todo.Username)||String.IsNullOrEmpty(settings.Todo.ProtectedPassword))){ShowTodoOptions(true);return;}
+            settings.Todo.Enabled=!settings.Todo.Enabled;DismissReminder(false,true);SaveSettings();
+            if(settings.Todo.Enabled)ShowReminder(true);
+        };
+        todoMenu.DropDownItems.Add(todoEnabled);
+        todoMenu.DropDownItems.Add("账号、服务器和显示数量…",null,delegate{ShowTodoOptions(false);});
+        var todoPreview=todoMenu.DropDownItems.Add("测试任务提醒",null,delegate{ShowReminder(true);});
+        todoMenu.DropDownItems.Add("今日任务／勾选完成…",null,delegate{ShowTodoTasks();});
+        todoMenu.DropDownOpening+=delegate{todoEnabled.Checked=settings.Todo.Enabled;todoPreview.Enabled=settings.Todo.Enabled;};
+        menu.Items.Add(todoMenu);
         var speed=new ToolStripMenuItem("散步速度");foreach(var item in new[]{new KeyValuePair<string,int>("慢速",24),new KeyValuePair<string,int>("舒缓（默认）",42),new KeyValuePair<string,int>("轻快",65)}){
             var value=item.Value;speed.DropDownItems.Add(item.Key,null,delegate{settings.Speed=value;motion.Speed=value;SaveSettings();});}menu.Items.Add(speed);
         var sizes=new ToolStripMenuItem("角色大小");foreach(int size in new[]{144,192,256}){int value=size;sizes.DropDownItems.Add(size+" 像素",null,delegate{double feet=motion.Y+Height;ResizeArt(value);motion.Y=feet-Height;motion.SetArea(monitor.WorkingArea,Width,Height);SaveSettings();});}menu.Items.Add(sizes);
@@ -178,17 +198,48 @@ sealed class PetWindow : Form {
                 reminders.Configure(settings.RemindersEnabled,settings.ReminderMinutes,DateTime.UtcNow);DismissReminder(false,false);SaveSettings();}
         }}finally{optionsOpen=false;}
     }
+    void ShowTodoOptions(bool enable) {
+        optionsOpen=true;
+        try{using(var dialog=new TodoOptions(settings.Todo,enable)){
+            if(dialog.ShowDialog()==DialogResult.OK){DismissReminder(false,true);settings.Todo=dialog.Value;todoClient=new TodoClient(settings.Todo);SaveSettings();if(settings.Todo.Enabled)ShowReminder(true);}
+        }}finally{optionsOpen=false;}
+    }
+    void ShowTodoTasks() {
+        if(String.IsNullOrWhiteSpace(settings.Todo.Username)||String.IsNullOrEmpty(settings.Todo.ProtectedPassword)){ShowTodoOptions(false);return;}
+        DismissReminder(false,true);optionsOpen=true;
+        try{using(var dialog=new TodoTasksWindow(todoClient))dialog.ShowDialog();}
+        finally{optionsOpen=false;}
+    }
+    async void ReadTodoReminder() {
+        var request=new CancellationTokenSource();todoRequest=request;
+        var client=todoClient;int count=settings.Todo.Count;
+        try {
+            var tasks=await Task.Factory.StartNew(()=>client.GetToday(request.Token),request.Token);
+            if(!request.IsCancellationRequested&&!IsDisposed&&settings.Todo.Enabled)
+                pendingTodoText=TodoClient.ReminderText(tasks,count,reminderRandom);
+        }catch(OperationCanceledException){}
+        catch(Exception e){if(!request.IsCancellationRequested&&!IsDisposed)pendingTodoText=e.Message+"\n请从托盘 Todo 重试。";}
+        finally{if(todoRequest==request)todoRequest=null;request.Dispose();}
+    }
     void ShowReminder(bool manual) {
-        if(bubble!=null){bubble.Present(settings.ReminderMessages[Math.Max(0,previousMessage)%settings.ReminderMessages.Length],Bounds,monitor.WorkingArea);return;}
+        if(bubble!=null){bubble.Present(displayedMessage,Bounds,monitor.WorkingArea);return;}
+        if(todoRequest!=null||pendingTodoText!=null)return;
         if(manual){reminders.RecordShown(DateTime.UtcNow);if(hidden){hidden=false;Show();}}
+        if(settings.Todo.Enabled&&!smoke){ReadTodoReminder();return;}
         int n=settings.ReminderMessages.Length,index=reminderRandom.Next(n);
         if(n>1&&index==previousMessage)index=(index+1+reminderRandom.Next(n-1))%n;
         previousMessage=index;
+        PresentReminder(settings.ReminderMessages[index]);
+    }
+    void PresentReminder(string text) {
+        displayedMessage=text;
         bubble=new ReminderBubble();bubble.Responded+=delegate(bool later){DismissReminder(later,true);};
-        bubble.Present(settings.ReminderMessages[index],new Rectangle((int)motion.X,(int)motion.Y,Width,Height),monitor.WorkingArea);
+        bubble.Present(text,new Rectangle((int)motion.X,(int)motion.Y,Width,Height),monitor.WorkingArea);
         bubbleUntil=clock.Elapsed.TotalSeconds+ReminderBubble.DisplaySeconds;waveUntil=clock.Elapsed.TotalSeconds+2.24;animationTime=0;remindersShown++;
     }
     void DismissReminder(bool later,bool reschedule) {
+        pendingTodoText=null;
+        if(todoRequest!=null){var request=todoRequest;todoRequest=null;request.Cancel();}
         if(bubble!=null){bubble.Close();bubble.Dispose();bubble=null;waveUntil=0;}
         if(reschedule){if(later)reminders.Snooze(DateTime.UtcNow,5);else reminders.Acknowledge(DateTime.UtcNow);}
     }
@@ -214,7 +265,9 @@ sealed class PetWindow : Form {
             if(quitEvent.WaitOne(0)){Close();return;}if(pauseEvent.WaitOne(0)){settings.Paused=!settings.Paused;SaveSettings();}
             double now=clock.Elapsed.TotalSeconds,dt=lastTick==0?0.033:now-lastTick;lastTick=now;
             if(bubble!=null&&now>=bubbleUntil)DismissReminder(false,true);
-            if(!smoke&&reminders.TakeDue(DateTime.UtcNow,!hidden&&!dragging&&!menuOpen&&!optionsOpen&&bubble==null))ShowReminder(false);
+            bool canRemind=!hidden&&!dragging&&!menuOpen&&!optionsOpen&&bubble==null;
+            if(pendingTodoText!=null&&canRemind){string text=pendingTodoText;pendingTodoText=null;PresentReminder(text);}
+            if(!smoke&&todoRequest==null&&pendingTodoText==null&&reminders.TakeDue(DateTime.UtcNow,canRemind&&bubble==null))ShowReminder(false);
             if(now-lastTip>=1){tray.Text="蓝蝶少女 · "+reminders.Status(DateTime.UtcNow);lastTip=now;}
             if(now-lastMonitorCheck>2&&!dragging){monitor=FindScreen(monitor.DeviceName);motion.SetArea(monitor.WorkingArea,Width,Height);lastMonitorCheck=now;}
             Point local=new Point(Cursor.Position.X-(int)motion.X,Cursor.Position.Y-(int)motion.Y);
