@@ -72,6 +72,7 @@ sealed class PetWindow : Form {
     readonly WalkMotion motion=new WalkMotion(Environment.TickCount);
     readonly Dictionary<string,Bitmap[]> art=new Dictionary<string,Bitmap[]>();
     readonly Dictionary<string,Bitmap[]> scaled=new Dictionary<string,Bitmap[]>();
+    readonly Dictionary<string,int[]> gifDurations=new Dictionary<string,int[]>();
     readonly NotifyIcon tray=new NotifyIcon(); readonly ContextMenuStrip menu=new ContextMenuStrip();
     readonly Icon applicationIcon,notificationIcon;
     readonly System.Windows.Forms.Timer timer=new System.Windows.Forms.Timer();
@@ -83,10 +84,10 @@ sealed class PetWindow : Form {
     TodoClient todoClient; CancellationTokenSource todoRequest;
     string displayedMessage="",pendingTodoText;
     readonly Random reminderRandom=new Random();int previousMessage=-1,reminderStage,remindersShown;
-    double bubbleUntil,lastTip,testReminderX; string animationState="";
-    ToolStripMenuItem pauseItem,hoverItem,hideItem; Bitmap current;
+    double bubbleUntil,lastTip,testReminderX; string animationState="",testAnimation="task";
+    ToolStripMenuItem pauseItem,hoverItem,hideItem; Bitmap current,hoverShape;
     bool dragging,menuOpen,hidden; Point mouseStart,windowStart;
-    double lastTick,animationTime,waveUntil,saveAt,lastMonitorCheck; string lastFrame="";
+    double lastTick,animationTime,waveUntil,taskUntil,saveAt,lastMonitorCheck; string lastFrame="";
     int renders,moves,rightRenders; Point initialPosition;
     public PetWindow(bool test,bool testReminder,EventWaitHandle quit,EventWaitHandle pause) {
         smoke=test||testReminder;reminderSmoke=testReminder; quitEvent=quit; pauseEvent=pause;
@@ -97,20 +98,22 @@ sealed class PetWindow : Form {
         settings=ReadSettings();
         todoClient=new TodoClient(settings.Todo);
         reminders=new ReminderSchedule(settings.RemindersEnabled,settings.ReminderMinutes,DateTime.UtcNow);
-        LoadArt("idle",6);LoadArt("wave",4);LoadArt("walk-left",8);LoadArt("walk-right",8);
-        string naturalRight=Path.Combine(root,"assets","natural-right"),rightRig=Path.Combine(root,"assets","rig");
-        if(Directory.Exists(rightRig))ReplaceArt("walk-right",RightWalkRig.Load(rightRig));
-        else if(Directory.Exists(naturalRight))ReplaceArt("walk-right",LoadFrames(naturalRight,"walk-right",8));
+        string gifRoot=Path.Combine(root,"assets","local-ayaka-2d","gifs");
+        LoadGifArt("idle",Path.Combine(gifRoot,"idle.gif"));LoadGifArt("wave",Path.Combine(gifRoot,"waving.gif"));
+        LoadGifArt("walk-left",Path.Combine(gifRoot,"running-left.gif"));LoadGifArt("walk-right",Path.Combine(gifRoot,"running-right.gif"));
+        LoadGifArt("task",Path.Combine(gifRoot,"running.gif"));LoadGifArt("jump",Path.Combine(gifRoot,"jumping.gif"));
+        LoadGifArt("failed",Path.Combine(gifRoot,"failed.gif"));LoadGifArt("waiting",Path.Combine(gifRoot,"waiting.gif"));
+        LoadGifArt("review",Path.Combine(gifRoot,"review.gif"));Text="神里绫华 · 散步";
         monitor=FindScreen(settings.Monitor); ResizeArt(settings.Size);
         motion.Speed=settings.Speed;
         motion.X=settings.X==int.MinValue?monitor.WorkingArea.Left+monitor.WorkingArea.Width*0.35:settings.X;
         motion.Y=settings.Y==int.MinValue?monitor.WorkingArea.Bottom-Height:settings.Y;
         motion.SetArea(monitor.WorkingArea,Width,Height); Location=new Point((int)motion.X,(int)motion.Y);
         initialPosition=Location; BuildMenu();
-        tray.Icon=notificationIcon;tray.Text="蓝蝶少女 · 右键暂停/退出";tray.ContextMenuStrip=menu;
+        tray.Icon=notificationIcon;tray.Text="神里绫华"+" · 右键暂停/退出";tray.ContextMenuStrip=menu;
         tray.DoubleClick+=delegate { hidden=false; Show();ResetPosition(false); };
         tray.Visible=!smoke;
-        timer.Interval=33;timer.Tick+=Tick;
+        timer.Interval=15;timer.Tick+=Tick;
         Shown+=delegate { Render("idle",0);timer.Start();if(smoke){settings.Paused=false;settings.PauseOnHover=false;motion.Rest=0;if(!reminderSmoke){motion.X=motion.MinX;initialPosition=new Point((int)motion.X,(int)motion.Y);}} };
     }
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -137,29 +140,63 @@ sealed class PetWindow : Form {
         catch(Exception e){Log("Settings: "+e.Message);}
     }
     void Log(string s){try{File.AppendAllText(Path.Combine(root,"walker.log"),DateTime.Now.ToString("s")+" "+s+Environment.NewLine);}catch{}}
-    void LoadArt(string name,int count) {
-        var frames=LoadFrames(Path.Combine(root,"assets"),name,count);
-        art.Add(name,frames);
+    void LoadGifArt(string name,string path) {
+        using(var gif=Image.FromFile(path)){
+            int count=gif.GetFrameCount(FrameDimension.Time);var frames=new Bitmap[count];var durations=new int[count];
+            byte[] delays=Array.IndexOf(gif.PropertyIdList,0x5100)>=0?gif.GetPropertyItem(0x5100).Value:new byte[0];
+            try{
+                for(int i=0;i<count;i++){
+                    gif.SelectActiveFrame(FrameDimension.Time,i);
+                    frames[i]=new Bitmap(gif.Width,gif.Height,PixelFormat.Format32bppArgb);
+                    using(var g=Graphics.FromImage(frames[i])){g.CompositingMode=CompositingMode.SourceCopy;g.DrawImageUnscaled(gif,0,0);}
+                    int delay=delays.Length>=(i+1)*4?BitConverter.ToInt32(delays,i*4)*10:100;
+                    durations[i]=delay>0?delay:100;
+                }
+            }catch{foreach(var frame in frames)if(frame!=null)frame.Dispose();throw;}
+            art.Add(name,frames);
+            gifDurations[name]=durations;
+        }
     }
-    Bitmap[] LoadFrames(string directory,string name,int count) {
-        var frames=new Bitmap[count];for(int i=0;i<count;i++)using(var b=new Bitmap(Path.Combine(directory,name+"-"+i+".png")))frames[i]=new Bitmap(b);
-        return frames;
+    int GifFrameIndex(string name,double seconds) {
+        int[] durations=gifDurations[name];double total=0;foreach(int delay in durations)total+=delay;
+        double elapsed=Math.Max(0,seconds*1000)%total;
+        for(int i=0;i<durations.Length;i++){if(elapsed<durations[i])return i;elapsed-=durations[i];}return 0;
     }
-    void ReplaceArt(string name,Bitmap[] frames){foreach(var old in art[name])old.Dispose();art[name]=frames;}
+    void TestTaskAnimation(string name) {
+        if(!gifDurations.ContainsKey(name))return;
+        testAnimation=name;
+        motion.StopFor(1);waveUntil=0;taskUntil=clock.Elapsed.TotalSeconds+6;
+        animationState="";animationTime=0;lastFrame="";
+    }
     void ResizeArt(int width) {
+        hoverShape=null;
         foreach(var frames in scaled.Values)foreach(var b in frames)b.Dispose();scaled.Clear();current=null;
         settings.Size=width;Size=new Size(width,(int)Math.Round(width*208.0/192));
         foreach(var entry in art){var frames=new Bitmap[entry.Value.Length];for(int i=0;i<frames.Length;i++){
             var b=new Bitmap(Width,Height,PixelFormat.Format32bppArgb);
-            using(var g=Graphics.FromImage(b)){g.CompositingMode=CompositingMode.SourceCopy;g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.DrawImage(entry.Value[i],new Rectangle(0,0,Width,Height));}
+            using(var g=Graphics.FromImage(b)){g.CompositingMode=CompositingMode.SourceCopy;
+                if(Width==entry.Value[i].Width&&Height==entry.Value[i].Height)g.DrawImageUnscaled(entry.Value[i],0,0);
+                else{g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.DrawImage(entry.Value[i],new Rectangle(0,0,Width,Height));}}
             frames[i]=b;}scaled.Add(entry.Key,frames);}
         lastFrame="";
     }
     Screen FindScreen(string name){foreach(var s in Screen.AllScreens)if(s.DeviceName==name)return s;return Screen.PrimaryScreen;}
     void BuildMenu() {
-        menu.Items.Add("Hydrangea Butterfly Girl").Enabled=false;
+        menu.Items.Add("神里绫华 · 2D").Enabled=false;
         pauseItem=new ToolStripMenuItem("暂停散步");pauseItem.Click+=delegate{settings.Paused=!settings.Paused;SaveSettings();};menu.Items.Add(pauseItem);
-        menu.Items.Add("挥挥手",null,delegate{motion.StopFor(3);waveUntil=clock.Elapsed.TotalSeconds+2.24;animationTime=0;});
+        var actionTests=new ToolStripMenuItem("测试任务动作");
+        foreach(var entry in new[]{
+            new KeyValuePair<string,string>("待机","idle"),new KeyValuePair<string,string>("向左跑步","walk-left"),
+            new KeyValuePair<string,string>("向右跑步","walk-right"),new KeyValuePair<string,string>("挥手","wave"),
+            new KeyValuePair<string,string>("跳跃","jump"),new KeyValuePair<string,string>("失败／失落","failed"),
+            new KeyValuePair<string,string>("等待确认","waiting"),new KeyValuePair<string,string>("工作／思考","task"),
+            new KeyValuePair<string,string>("审阅结果","review")}){
+            string action=entry.Value;
+            actionTests.DropDownItems.Add(entry.Key,null,delegate{TestTaskAnimation(action);}).Enabled=gifDurations.ContainsKey(action);
+        }
+        actionTests.DropDownItems.Add(new ToolStripSeparator());
+        actionTests.DropDownItems.Add("停止测试",null,delegate{taskUntil=0;animationState="";animationTime=0;lastFrame="";});
+        actionTests.Enabled=true;menu.Items.Add(actionTests);
         hoverItem=new ToolStripMenuItem("鼠标悬停时暂停");hoverItem.Click+=delegate{settings.PauseOnHover=!settings.PauseOnHover;SaveSettings();};menu.Items.Add(hoverItem);
         var reminderMenu=new ToolStripMenuItem("休息提醒");
         var status=new ToolStripMenuItem();status.Enabled=false;reminderMenu.DropDownItems.Add(status);
@@ -247,7 +284,16 @@ sealed class PetWindow : Form {
         if(bottom){motion.X=monitor.WorkingArea.Left+(monitor.WorkingArea.Width-Width)/2;motion.Y=monitor.WorkingArea.Bottom-Height;}
         motion.SetArea(monitor.WorkingArea,Width,Height);motion.StopFor(2);SaveSettings();lastFrame="";
     }
-    bool OpaquePoint(Point point){return current!=null&&point.X>=0&&point.Y>=0&&point.X<Width&&point.Y<Height&&current.GetPixel(point.X,point.Y).A>24;}
+    bool OpaquePoint(Bitmap bitmap,Point point){return bitmap!=null&&point.X>=0&&point.Y>=0&&point.X<bitmap.Width&&point.Y<bitmap.Height&&bitmap.GetPixel(point.X,point.Y).A>24;}
+    bool Hovering(Point point) {
+        if(!settings.PauseOnHover){hoverShape=null;return false;}
+        // Keep the hit shape that triggered the pause, across the walk-to-idle change.
+        if(OpaquePoint(hoverShape,point))return true;
+        hoverShape=null;
+        if(!OpaquePoint(current,point))return false;
+        hoverShape=current;
+        return true;
+    }
     protected override void OnMouseDown(MouseEventArgs e) {
         base.OnMouseDown(e);if(e.Button==MouseButtons.Right){menu.Show(this,e.Location);return;}
         if(e.Button==MouseButtons.Left){dragging=true;Capture=true;mouseStart=Cursor.Position;windowStart=new Point((int)motion.X,(int)motion.Y);}
@@ -259,7 +305,6 @@ sealed class PetWindow : Form {
     }
     protected override void OnMouseUp(MouseEventArgs e){base.OnMouseUp(e);if(!dragging)return;dragging=false;Capture=false;monitor=Screen.FromPoint(Cursor.Position);motion.SetArea(monitor.WorkingArea,Width,Height);motion.StopFor(2);SaveSettings();}
     protected override void OnMouseCaptureChanged(EventArgs e){base.OnMouseCaptureChanged(e);if(dragging&&!Capture){dragging=false;monitor=Screen.FromPoint(Cursor.Position);motion.SetArea(monitor.WorkingArea,Width,Height);motion.StopFor(2);}}
-    int IdleIndex(double t){double[] d={1.68,.66,.66,.84,.84,1.92};t%=6.6;for(int i=0;i<d.Length;i++){if(t<d[i])return i;t-=d[i];}return 0;}
     void Tick(object sender,EventArgs args) {
         try {
             if(quitEvent.WaitOne(0)){Close();return;}if(pauseEvent.WaitOne(0)){settings.Paused=!settings.Paused;SaveSettings();}
@@ -268,21 +313,20 @@ sealed class PetWindow : Form {
             bool canRemind=!hidden&&!dragging&&!menuOpen&&!optionsOpen&&bubble==null;
             if(pendingTodoText!=null&&canRemind){string text=pendingTodoText;pendingTodoText=null;PresentReminder(text);}
             if(!smoke&&todoRequest==null&&pendingTodoText==null&&reminders.TakeDue(DateTime.UtcNow,canRemind&&bubble==null))ShowReminder(false);
-            if(now-lastTip>=1){tray.Text="蓝蝶少女 · "+reminders.Status(DateTime.UtcNow);lastTip=now;}
+            if(now-lastTip>=1){tray.Text="神里绫华"+" · "+reminders.Status(DateTime.UtcNow);lastTip=now;}
             if(now-lastMonitorCheck>2&&!dragging){monitor=FindScreen(monitor.DeviceName);motion.SetArea(monitor.WorkingArea,Width,Height);lastMonitorCheck=now;}
             Point local=new Point(Cursor.Position.X-(int)motion.X,Cursor.Position.Y-(int)motion.Y);
-            bool frozen=settings.Paused||dragging||menuOpen||hidden||optionsOpen||bubble!=null||(settings.PauseOnHover&&OpaquePoint(local))||now<waveUntil;
+            bool frozen=settings.Paused||dragging||menuOpen||hidden||optionsOpen||bubble!=null||Hovering(local)||now<waveUntil||now<taskUntil;
             motion.Tick(dt,frozen);
             string key=motion.Walking&&!frozen?(motion.Direction>0?"walk-right":"walk-left"):"idle";
-            if(now<waveUntil)key="wave";
-            if(key!=animationState){animationTime=0;animationState=key;}else animationTime+=Math.Min(dt,0.1);
-            int frame=key=="idle"?IdleIndex(animationTime):(int)(animationTime/(42.0/motion.Speed*.96/art[key].Length))%art[key].Length;
-            if(key=="wave")frame=(int)(animationTime/.14)%4;
+            if(now<taskUntil)key=testAnimation;else if(now<waveUntil)key="wave";
+            if(key!=animationState){animationTime=0;animationState=key;}else animationTime+=Math.Max(0,dt);
+            int frame=GifFrameIndex(key,animationTime);
             if(!hidden){Native.SetWindowPos(Handle,new IntPtr(-1),(int)Math.Round(motion.X),(int)Math.Round(motion.Y),0,0,0x11);moves++;if(key+frame!=lastFrame)Render(key,frame);}
             if(bubble!=null)bubble.Reposition(new Rectangle((int)motion.X,(int)motion.Y,Width,Height),monitor.WorkingArea);
             if(now-saveAt>15){SaveSettings();saveAt=now;}
             if(reminderSmoke)ReminderSmokeTick(now);
-            else if(smoke&&now>=8){var report=new {ok=rightRenders>5&&motion.X-initialPosition.X>5,renders=renders,rightRenders=rightRenders,rightFrameCount=art["walk-right"].Length,moves=moves,startX=initialPosition.X,endX=motion.X,windowWidth=Width,windowHeight=Height};File.WriteAllText(Path.Combine(root,"smoke-report.json"),new JavaScriptSerializer().Serialize(report));Close();}
+            else if(smoke&&now>=8){var report=new {ok=rightRenders>5&&motion.X-initialPosition.X>5,renders=renders,rightRenders=rightRenders,rightFrameCount=art["walk-right"].Length,leftFrameCount=art["walk-left"].Length,gifPlayback=true,taskFrameCount=art.ContainsKey("task")?art["task"].Length:0,idleFrameCount=art["idle"].Length,waveFrameCount=art["wave"].Length,moves=moves,startX=initialPosition.X,endX=motion.X,windowWidth=Width,windowHeight=Height};File.WriteAllText(Path.Combine(root,"smoke-report.json"),new JavaScriptSerializer().Serialize(report));Close();}
         } catch(Exception e){Log(e.ToString());timer.Stop();MessageBox.Show("散步程序已暂停："+e.Message,"Hydrangea Butterfly Girl");Close();}
     }
     void ReminderSmokeTick(double now) {
@@ -307,7 +351,6 @@ static class Program {
     const string Name="Local\\HydrangeaButterflyGirlWalker-v1";
     [STAThread] static int Main(string[] args) {
         string root=AppDomain.CurrentDomain.BaseDirectory;
-        if(Array.IndexOf(args,"--export-right-rig")>=0){try{RightWalkRig.ExportPreview(root);return 0;}catch(Exception e){File.WriteAllText(Path.Combine(root,"rig-export-error.txt"),e.ToString());return 1;}}
         if(Array.IndexOf(args,"--self-test")>=0){try{SelfTest();File.WriteAllText(Path.Combine(root,"self-test-report.txt"),"PASS: boundaries, negative monitor coordinates, paused state, random stops, small work areas, asset decoding; reminder intervals, deferred hidden reminder, no sleep backlog, snooze, acknowledge, disabled reminders, interval limits, legacy settings, bubble bounds.");return 0;}catch(Exception e){File.WriteAllText(Path.Combine(root,"self-test-report.txt"),e.ToString());return 1;}}
         foreach(string command in new[]{"--quit","--pause"})if(Array.IndexOf(args,command)>=0){try{using(var ev=EventWaitHandle.OpenExisting(Name+command))ev.Set();return 0;}catch(WaitHandleCannotBeOpenedException){return 2;}}
         bool fresh;using(var mutex=new Mutex(true,Name,out fresh)){
@@ -336,6 +379,19 @@ static class Program {
             double x=m.X,rest=m.Rest;bool walking=m.Walking;for(int i=0;i<100;i++)m.Tick(.033,true);Require(x==m.X&&rest==m.Rest&&walking==m.Walking,"Pause changes movement");
             m.X=m.MaxX; m.StartTrip(); if(m.MaxX>m.MinX)Require(m.Direction==-1,"Right edge fails to turn");m.X=m.MinX;m.StartTrip();if(m.MaxX>m.MinX)Require(m.Direction==1,"Left edge fails to turn");
         }
-        string assets=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"assets");int count=0;foreach(var file in Directory.GetFiles(assets,"*.png"))using(var b=new Bitmap(file)){Require(b.Width==192&&b.Height==208,"Invalid frame size");Require(b.GetPixel(0,0).A==0,"Opaque background");count++;}Require(count==26,"Missing animation frames");
+        string gifs=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"assets","local-ayaka-2d","gifs");
+        string[] names={"idle","running-left","running-right","waving","jumping","failed","waiting","running","review"};
+        int[] counts={6,8,8,4,5,8,6,6,6};
+        for(int n=0;n<names.Length;n++)using(var gif=Image.FromFile(Path.Combine(gifs,names[n]+".gif"))){
+            Require(gif.Width==192&&gif.Height==208,"Invalid GIF canvas: "+names[n]);
+            Require(gif.GetFrameCount(FrameDimension.Time)==counts[n],"Missing GIF frames: "+names[n]);
+            byte[] delays=gif.GetPropertyItem(0x5100).Value;
+            Require(delays.Length>=counts[n]*4,"Missing GIF timing: "+names[n]);
+            for(int i=0;i<counts[n];i++){
+                Require(BitConverter.ToInt32(delays,i*4)>0,"Invalid GIF timing: "+names[n]);
+                gif.SelectActiveFrame(FrameDimension.Time,i);
+                using(var frame=new Bitmap(gif))Require(frame.GetPixel(0,0).A==0,"Opaque GIF background: "+names[n]);
+            }
+        }
     }
 }
