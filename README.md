@@ -1,4 +1,4 @@
-# Pet Walker · 蓝蝶少女桌宠
+# Pet Walker · 神里绫华 GIF 桌宠
 
 <img src="icons/app-icon.png" width="128" alt="蓝蝶少女桌宠图标">
 
@@ -6,7 +6,7 @@ Windows 透明桌面散步宠物，集成定时休息提醒、漫画气泡和系
 
 ## 功能
 
-- 随机左右散步、停留休息、待机与挥手；向右采用固定角色图层制作轻柔小步走动画。
+- 随机左右散步、停留休息、待机与挥手；直接使用作者原始 GIF 的全部帧、透明背景和时长。
 - 拖动定位、多显示器、三档速度和大小、悬停暂停、托盘隐藏与恢复。
 - 默认每 55 分钟提醒休息，支持 1–1440 分钟间隔及自定义文案，避免连续重复。
 - 提醒时暂停散步并挥手，显示小型漫画气泡；点击文字或空白即可关闭，不点击则 5 分钟后消失，再开始下一轮计时。
@@ -34,7 +34,7 @@ EXE 与 assets 文件夹须放在同一目录。程序在自身目录写入 sett
 | --- | --- |
 | 左键拖动 | 调整位置及所在显示器 |
 | 鼠标悬停 | 默认暂停散步，移开后继续 |
-| 右键角色或托盘 | 暂停、挥手、速度、大小、显示器、回到底部、隐藏或退出 |
+| 右键角色或托盘 | 暂停、测试九类动作、速度、大小、显示器、回到底部、隐藏或退出 |
 | 双击托盘 | 重新显示角色 |
 | 右键 → 休息提醒 | 设置间隔和文案、测试提醒、暂停提醒 |
 | 点击提醒气泡 | 收起气泡并重新计时 |
@@ -57,10 +57,11 @@ Get-Content .\self-test-report.txt
 
 - PetWalker.cs：透明窗口、散步、托盘及设置。
 - Reminder.cs：提醒计时、漫画气泡、设置和图标。
-- RightWalkRig.cs：向右行走分层动画。
-- assets/：26 张基础动作图；rig/ 包含身体、双腿图层与关节配置。
+- assets/local-ayaka-2d/gifs/：正式使用的九个原始 GIF；同级 CREDITS.txt 记录来源。
 - icons/：构建图标与项目头像。
 - build.ps1、package.ps1：编译和便携打包。
+- GifPlaybackTests.cs、test-gif.ps1：原始时长、九个子菜单、播放恢复验证。
+- sources/：本地保留的 GitHub 原始资源与「花时来信」3D 工程，不提交 Git 或打包。
 
 仓库不包含编译产物、个人设置、备份、重复素材、原始生成图、动画实验及测试输出。旧 ScheduledPopUp 发布包属于原提醒程序，不是当前桌宠版本。
 
@@ -77,3 +78,19 @@ Get-Content .\self-test-report.txt
 新增 `Todo.cs` 包含接口、设置和独立任务管理窗口；原 `Reminder.cs` 保持不变。
 
 本地测试：运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\test-todo.ps1`。仅使用本地模拟后端和虚构账号，验证接口、原气泡点击消失、独立任务列表及部分失败重试；预览输出到 `qa/`，不修改个人设置。
+
+
+## GIF 动作与测试菜单
+
+素材来自 [TiantianTitan/codex-anime-pets](https://github.com/TiantianTitan/codex-anime-pets/tree/main/work/kamisato-ayaka/2d/qa/previews)。程序只加载 `assets/local-ayaka-2d/gifs/`，不再依赖旧 PNG、3D 行走帧或分层动画资源。GIF 未改动，保留原始帧顺序与时长；移动速度只影响桌面位置。默认 192×208 尺寸直接绘制，其他用户指定大小统一整格缩放。
+
+右键 **测试任务动作** 包含待机、向左跑步、向右跑步、挥手、跳跃、失败／失落、等待确认、工作／思考、审阅结果。选择后原地播放约 6 秒再恢复；可以切换动作或点击“停止测试”。不会调用 Todo 服务。悬停暂停保存触发时的命中轮廓，避免动画透明区域变化导致抖动。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\test-gif.ps1
+```
+
+GIF 测试覆盖九个子菜单、57 帧、逐帧时长与循环、停止测试和超时恢复，报告写入 `qa/gif-playback/`。测试前退出正常桌宠。缺失 GIF 时启动报错，不回退到其他角色。
+
+便携包包含正式 GIF 及来源说明，不含个人设置、原始压缩包、3D 工程或历史试验。角色及素材权利仍归原权利人，来源见 `assets/local-ayaka-2d/CREDITS.txt`。

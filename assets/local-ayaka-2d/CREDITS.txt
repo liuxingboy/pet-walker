@@ -1,0 +1,15 @@
+Kamisato Ayaka / 神里绫华 — original GIF animation assets
+
+Source repository: https://github.com/TiantianTitan/codex-anime-pets
+Source directory: work/kamisato-ayaka/2d/qa/previews/
+Contributor: TiantianTitan
+Character: Genshin Impact / HoYoverse
+Upstream tree commit: 0fed1f78265e6c51930afb9fb741fcbc65435583
+
+The nine GIF files are unmodified downloads. Their original frame order, timing,
+transparency and infinite looping are preserved. They are decoded in memory;
+no newly generated artwork, frame interpolation or sprite redrawing is used.
+
+Any upstream open-source license does not grant rights to third-party character
+names, designs, artwork or trademarks; those remain with their respective owners.
+Local original archives and download hashes are retained under sources/github-ayaka/.
